@@ -10,14 +10,14 @@ import net.minecraft.command.CommandSource;
 import net.minecraft.component.ComponentChanges;
 import net.minecraft.component.DataComponentTypes;
 import net.minecraft.component.type.NbtComponent;
-import net.minecraft.component.type.ProfileComponent;
+import net.minecraft.entity.EntityType;
+import net.minecraft.entity.TypedEntityData;
 import net.minecraft.item.BlockItem;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.nbt.NbtDouble;
 import net.minecraft.nbt.NbtList;
-import net.minecraft.nbt.NbtString;
 import net.minecraft.registry.Registries;
 import net.minecraft.text.Text;
 
@@ -45,7 +45,9 @@ public class GiveCommand extends Command {
                 ct.putInt("Time", 1);
                 ct.putString("id", "minecraft:falling_block");
                 ct.put("BlockState", new NbtCompound());
-                ct.getCompound("BlockState").putString("Name", Registries.ITEM.getId(inHand.getItem()).toString());
+                ct.getCompound("BlockState").ifPresent(compound ->
+                        compound.put("Name", net.minecraft.nbt.NbtString.of(Registries.ITEM.getId(inHand.getItem()).toString()))
+                );
 
             } else {
                 ct.putString("id", "minecraft:item");
@@ -68,35 +70,19 @@ public class GiveCommand extends Command {
             return SINGLE_SUCCESS;
         }));
 
-        //TODO: allow for custom cords to place oob, though optional args
-        builder.then(literal("holo").then(argument("message", StringArgumentType.greedyString()).executes(ctx -> {
-            String message = ctx.getArgument("message", String.class).replace("&", "\247");
-            ItemStack stack = new ItemStack(Items.STRIDER_SPAWN_EGG);
-            NbtCompound tag = new NbtCompound();
-            NbtList pos = new NbtList();
+        builder.then(literal("holo")
+                .then(argument("message", StringArgumentType.greedyString()).executes(ctx -> {
+                    String message = ctx.getArgument("message", String.class).replace("&", "\247");
+                    return createHolo(message, mc.player.getX(), mc.player.getY(), mc.player.getZ());
+                }))
+                .then(argument("pos", anticope.rejects.arguments.ClientPosArgumentType.pos())
+                        .then(argument("message", StringArgumentType.greedyString()).executes(ctx -> {
+                            String message = ctx.getArgument("message", String.class).replace("&", "\247");
+                            net.minecraft.util.math.Vec3d pos = anticope.rejects.arguments.ClientPosArgumentType.getPos(ctx, "pos");
+                            return createHolo(message, pos.x, pos.y, pos.z);
+                        })))
+        );
 
-            pos.add(NbtDouble.of(mc.player.getX()));
-            pos.add(NbtDouble.of(mc.player.getY()));
-            pos.add(NbtDouble.of(mc.player.getZ()));
-
-            tag.putString("id", "minecraft:armor_stand");
-            tag.put("Pos", pos);
-            tag.putBoolean("Invisible", true);
-            tag.putBoolean("Invulnerable", true);
-            tag.putBoolean("NoGravity", true);
-            tag.putBoolean("CustomNameVisible", true);
-
-            var changes = ComponentChanges.builder()
-                    .add(DataComponentTypes.CUSTOM_NAME, Text.literal(message))
-                    .add(DataComponentTypes.ENTITY_DATA, NbtComponent.of(tag))
-                    .build();
-
-            stack.applyChanges(changes);
-            GiveUtils.giveItem(stack);
-            return SINGLE_SUCCESS;
-        })));
-
-        //TODO, make invisible through potion effect
         builder.then(literal("bossbar").then(argument("message", StringArgumentType.greedyString()).executes(ctx -> {
             String message = ctx.getArgument("message", String.class).replace("&", "\247");
             ItemStack stack = new ItemStack(Items.BAT_SPAWN_EGG);
@@ -104,11 +90,22 @@ public class GiveCommand extends Command {
             tag.putBoolean("NoAI", true);
             tag.putBoolean("Silent", true);
             tag.putBoolean("PersistenceRequired", true);
-            tag.put("id", NbtString.of("minecraft:wither"));
+            tag.putBoolean("Invulnerable", true);
+
+            // Add invisibility potion effect
+            NbtList effects = new NbtList();
+            NbtCompound invisEffect = new NbtCompound();
+            invisEffect.putString("id", "minecraft:invisibility");
+            invisEffect.putInt("amplifier", 0);
+            invisEffect.putInt("duration", 2147483647); // Max int value for permanent effect
+            invisEffect.putBoolean("ambient", false);
+            invisEffect.putBoolean("show_particles", false);
+            effects.add(invisEffect);
+            tag.put("active_effects", effects);
 
             var changes = ComponentChanges.builder()
                     .add(DataComponentTypes.CUSTOM_NAME, Text.literal(message))
-                    .add(DataComponentTypes.ENTITY_DATA, NbtComponent.of(tag))
+                    .add(DataComponentTypes.ENTITY_DATA, TypedEntityData.create(EntityType.WITHER, tag))
                     .build();
             stack.applyChanges(changes);
 
@@ -122,7 +119,7 @@ public class GiveCommand extends Command {
             ItemStack itemStack = new ItemStack(Items.PLAYER_HEAD);
 
             var changes = ComponentChanges.builder()
-                    .add(DataComponentTypes.PROFILE, new ProfileComponent(new GameProfile(getUUID(playerName), playerName)))
+                    .add(DataComponentTypes.PROFILE, net.minecraft.component.type.ProfileComponent.ofStatic(new GameProfile(getUUID(playerName), playerName)))
                     .build();
 
             itemStack.applyChanges(changes);
@@ -136,5 +133,30 @@ public class GiveCommand extends Command {
             GiveUtils.giveItem(GiveUtils.getPreset(name));
             return SINGLE_SUCCESS;
         })));
+    }
+
+    private int createHolo(String message, double x, double y, double z) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        ItemStack stack = new ItemStack(Items.STRIDER_SPAWN_EGG);
+        NbtCompound tag = new NbtCompound();
+        NbtList pos = new NbtList();
+
+        pos.add(NbtDouble.of(x));
+        pos.add(NbtDouble.of(y));
+        pos.add(NbtDouble.of(z));
+
+        tag.put("Pos", pos);
+        tag.putBoolean("Invisible", true);
+        tag.putBoolean("Invulnerable", true);
+        tag.putBoolean("NoGravity", true);
+        tag.putBoolean("CustomNameVisible", true);
+
+        var changes = ComponentChanges.builder()
+                .add(DataComponentTypes.CUSTOM_NAME, Text.literal(message))
+                .add(DataComponentTypes.ENTITY_DATA, TypedEntityData.create(EntityType.ARMOR_STAND, tag))
+                .build();
+
+        stack.applyChanges(changes);
+        GiveUtils.giveItem(stack);
+        return SINGLE_SUCCESS;
     }
 }
