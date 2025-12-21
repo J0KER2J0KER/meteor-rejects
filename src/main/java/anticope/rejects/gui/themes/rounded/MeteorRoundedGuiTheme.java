@@ -287,6 +287,11 @@ public class MeteorRoundedGuiTheme extends GuiTheme {
     }
 
     @Override
+    public WWidget module(Module module, String title) {
+        return module(module);
+    }
+
+    @Override
     public WQuad quad(Color color) {
         return w(new WMeteorQuad(color));
     }

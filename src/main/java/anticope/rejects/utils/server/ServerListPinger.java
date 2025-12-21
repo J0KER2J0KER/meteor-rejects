@@ -9,6 +9,8 @@ import net.minecraft.client.network.LegacyServerPinger;
 import net.minecraft.client.network.ServerAddress;
 import net.minecraft.network.ClientConnection;
 import net.minecraft.network.DisconnectionInfo;
+import net.minecraft.network.NetworkSide;
+import net.minecraft.network.NetworkingBackend;
 import net.minecraft.network.listener.ClientQueryPacketListener;
 import net.minecraft.network.packet.c2s.query.QueryPingC2SPacket;
 import net.minecraft.network.packet.c2s.query.QueryRequestC2SPacket;
@@ -60,18 +62,24 @@ public class ServerListPinger {
 
     public void add(final MServerInfo entry, final Runnable runnable) throws UnknownHostException {
         ServerAddress serverAddress = ServerAddress.parse(entry.address);
-        Optional<InetSocketAddress> address = AllowedAddressResolver.DEFAULT.resolve(serverAddress).map(Address::getInetSocketAddress);
-        if (address.isEmpty()) {
+        Optional<InetSocketAddress> addressOpt = AllowedAddressResolver.DEFAULT
+                .resolve(serverAddress)
+                .map(Address::getInetSocketAddress);
+
+        if (addressOpt.isEmpty()) {
             return;
         }
-        final ClientConnection clientConnection = ClientConnection.connect(address.get(), false, (MultiValueDebugSampleLogImpl) null);
+
+        InetSocketAddress address = addressOpt.get();
+        ClientConnection clientConnection = new ClientConnection(NetworkSide.CLIENTBOUND);
+
 
         failedToConnect = false;
         this.clientConnections.add(clientConnection);
         entry.label = "multiplayer.status.pinging";
         entry.ping = -1L;
         entry.playerListSummary = null;
-        ClientQueryPacketListener clientQueryPacketListener = new ClientQueryPacketListener() {
+        clientConnection.connect(address.getHostString(), address.getPort(), new ClientQueryPacketListener() {
             private boolean sentQuery;
             private boolean received;
             private long startTime;
@@ -83,68 +91,53 @@ public class ServerListPinger {
                 }
                 this.received = true;
                 ServerMetadata serverMetadata = packet.metadata();
-                if (serverMetadata.description() != null) {
-                    entry.label = serverMetadata.description().getString();
-                } else {
-                    entry.label = "";
-                }
-
+                entry.label = serverMetadata.description() != null ? serverMetadata.description().getString() : "";
                 entry.version = serverMetadata.version().map(ServerMetadata.Version::gameVersion).orElse("multiplayer.status.old");
                 serverMetadata.players().ifPresentOrElse(players -> {
                     entry.playerCountLabel = ServerListPinger.getPlayerCountLabel(players.online(), players.max());
                     entry.playerCount = players.online();
                     entry.playercountMax = players.max();
-                }, () -> {
-                    entry.playerCountLabel = "multiplayer.status.unknown";
-                });
+                }, () -> entry.playerCountLabel = "multiplayer.status.unknown");
 
                 this.startTime = Util.getMeasuringTimeMs();
                 clientConnection.send(new QueryPingC2SPacket(this.startTime));
                 this.sentQuery = true;
-                notifyDisconnectListeners();
-                }
+            }
 
             public void onPingResult(PingResultS2CPacket packet) {
-                long l = this.startTime;
-                long m = Util.getMeasuringTimeMs();
-                entry.ping = m - l;
+                entry.ping = Util.getMeasuringTimeMs() - this.startTime;
                 clientConnection.disconnect(Text.translatable("multiplayer.status.finished"));
             }
 
-            public void onDisconnected(Text reason) {
+            public void onDisconnected(DisconnectionInfo info) {
                 if (!this.sentQuery) {
-                    ServerListPinger.LOGGER.error("Can't ping {}: {}", entry.address, reason.getString());
+                    ServerListPinger.LOGGER.error("Can't ping {}: {}", entry.address, info.reason().getString());
                     entry.label = "multiplayer.status.cannot_connect";
                     entry.playerCountLabel = "";
                     entry.playerCount = 0;
                     entry.playercountMax = 0;
                     ServerListPinger.this.ping(entry);
                 }
-                notifyDisconnectListeners();
             }
 
             @Override
-            public void onDisconnected(DisconnectionInfo info) {
-
-            }
-
             public boolean isConnectionOpen() {
                 return clientConnection.isOpen();
             }
-        };
+        });
 
         try {
-            clientConnection.connect(serverAddress.getAddress(), serverAddress.getPort(), clientQueryPacketListener);
             clientConnection.send(QueryRequestC2SPacket.INSTANCE);
-        } catch (Throwable var8) {
-            LOGGER.error("Failed to ping server {}", serverAddress, var8);
+        } catch (Throwable t) {
+            ServerListPinger.LOGGER.error("Failed to ping server {}", serverAddress, t);
         }
 
+        runnable.run();
     }
 
     private void ping(final MServerInfo serverInfo) {
         final ServerAddress serverAddress = ServerAddress.parse(serverInfo.address);
-        new Bootstrap().group(ClientConnection.CLIENT_IO_GROUP.get()).handler(new ChannelInitializer<>() {
+        new Bootstrap().group(NetworkingBackend.local().getEventLoopGroup()).handler(new ChannelInitializer<>() {
             @Override
             protected void initChannel(Channel ch) throws Exception {
                 try {

@@ -1,10 +1,10 @@
 plugins {
-	id 'fabric-loom' version '1.13-SNAPSHOT'
+	id 'fabric-loom' version '1.14.7'
 }
 
-sourceCompatibility = targetCompatibility = JavaVersion.VERSION_21
+//sourceCompatibility = targetCompatibility = JavaVersion.VERSION_21
 
-archivesBaseName = project.archives_base_name
+//archivesBaseName = project.archives_base_name
 version = project.mod_version
 group = project.maven_group
 
@@ -71,7 +71,7 @@ processResources {
 
 jar {
 	from("LICENSE") {
-		rename { "${it}_${project.archivesBaseName}" }
+		rename { "${it}_${project.archives_base_name}" }
 	}
 	from {
 		configurations.extraLibs.collect { it.isDirectory() ? it : zipTree(it) }
